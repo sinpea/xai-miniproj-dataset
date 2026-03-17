@@ -7,3 +7,7 @@ test set.
 The species wise features were extracted and organized based on a knee funciton applied on each feature and the percentage of time a variation of the feature occured.
 
 A threshold value was also used to prevent noise from human error creeping in within the species-wise characteristics.
+
+## Other Instructions
+
+For running `extract_class_attr.py` move this file to the directory `./CUB_200_2011/data/CUB_200_2011` and execute.
