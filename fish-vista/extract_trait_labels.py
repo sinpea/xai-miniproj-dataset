@@ -136,14 +136,18 @@ annotations_dict = []
 
 # check if the paths exist.
 #for idx in range(len(mask_image_paths)):
+id = 2222
+imgid = 4444
 for idx in range(10):
     # not all images will be found
     # i
     path_img = Path(img_path) / source_image_paths[idx]
     mask_img = Path(seg_mask_path) / mask_image_paths[idx]
-    
+    imgid += 1
     if Path.exists(path_img) and Path.exists(mask_img):
         # ok, we take the image path and get our individual part by part masked images
+        img_dict.append({"image_id":imgid,"file_name":str(path_img)})
+        
         img_mask = Image.open(os.path.join(seg_mask_path, mask_image_paths[idx]))
         img_mask_arr = np.asarray(img_mask)
         original_img = Image.open(os.path.join(img_path, source_image_paths[idx]))
@@ -152,6 +156,7 @@ for idx in range(10):
         
         # The Blacking of Image
         # we will later loop for each trait
+        annot_send = {"image_id":imgid}
         for trait_value in range(1,10):
             """
             # 1. Create a True/False mask for your specific trait
@@ -215,9 +220,12 @@ for idx in range(10):
                 print("Saved cropped feature successfully to : ",processed_img_path + mask_image_paths[idx])
                 
                 # Save the final bounding boxes and stuff to image data
+                # annot_send.append({"id":id,"image_id":imgid,"bbox":[final_x_min,final_y_min,final_x_max-final_x_min,final_y_max-final_y_min],})
+                annot_send[segmentation_traits[trait_value]] = {"bbox":[int(final_x_min),int(final_y_min),int(final_x_max-final_x_min),int(final_y_max-final_y_min)]}
+                id += 1
             else:
                 print("Trait not found in this mask.")
-        
+        annotations_dict.append(annot_send)
         
     else:
         print("Image not found")
@@ -332,4 +340,7 @@ df.to_csv("dorsal_fin_traits.csv", index=False)
 with open("species_wise.json","w") as f:
     json.dump(species_dict,f)
 
+fin_json = {"images":img_dict,"annotations":annotations_dict,"categories":species_dict}
+with open("fish-vista-train-01.json","w") as f:
+    json.dump(fin_json,f)
 print("Processing complete! Saved to dorsal_fin_traits.csv")
