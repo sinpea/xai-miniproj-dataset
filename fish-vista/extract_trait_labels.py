@@ -15,7 +15,6 @@ from transformers import AutoProcessor, AutoModel
 
 # replace with segmentation_test later
 species_dict = {}
-
 segmentation_df = pd.read_csv("segmentation_train.csv")
 
 
@@ -130,6 +129,11 @@ bioclip_trait_labels = {
 seg_mask_path = "segmentation_masks/images"
 img_path = "Images/"
 processed_img_path = "crops/"
+
+
+img_dict = []
+annotations_dict = []
+
 # check if the paths exist.
 #for idx in range(len(mask_image_paths)):
 for idx in range(10):
@@ -149,7 +153,7 @@ for idx in range(10):
         # The Blacking of Image
         # we will later loop for each trait
         for trait_value in range(1,10):
-        
+            """
             # 1. Create a True/False mask for your specific trait
             binary_mask = (img_mask_arr == trait_value)
 
@@ -163,7 +167,7 @@ for idx in range(10):
                 extracted_feature_img[binary_mask] = original_arr[binary_mask]
             else: # It's a grayscale image
                 extracted_feature_img[binary_mask] = original_arr[binary_mask]
-            
+            """
             
             # The Cropping of image
             # 1. Create the binary mask
@@ -174,11 +178,31 @@ for idx in range(10):
 
             if coords.size > 0:
                 # 3. Find the minimum and maximum coordinates to create a bounding box
+                margin_ratio = 0.25
+                    
                 y_min, x_min = coords.min(axis=0)
                 y_max, x_max = coords.max(axis=0)
-
+                
+                img_height, img_width = original_arr.shape[:2]
+                # 4. Calculate the current dimensions of the tight box
+                box_width = x_max - x_min
+                box_height = y_max - y_min
+                
+                # 5. Calculate how many pixels to add to each side (e.g., 25%)
+                pad_x = int(box_width * margin_ratio)
+                pad_y = int(box_height * margin_ratio)
+                
+                # 6. Add the margin, using max() and min() to prevent out-of-bounds errors!
+                final_x_min = max(0, x_min - pad_x)
+                final_y_min = max(0, y_min - pad_y)
+                final_x_max = min(img_width, x_max + pad_x)
+                final_y_max = min(img_height, y_max + pad_y)
+                
+                
                 # 4. Slice the original array to crop it
-                cropped_feature = extracted_feature_img[y_min:y_max+1, x_min:x_max+1]
+                # cropped_feature = extracted_feature_img[y_min:y_max+1, x_min:x_max+1]
+                # cropped_feature = original_arr[y_min:y_max+1, x_min:x_max+1]
+                cropped_feature = original_arr[final_y_min:final_y_max, final_x_min:final_x_max]
                 # To view or save it:
                 # Image.fromarray(cropped_feature).show()
 
@@ -189,6 +213,8 @@ for idx in range(10):
                 # Save the image
                 cropped_img_to_save.save(processed_img_path + segmentation_traits[trait_value] + "/" + mask_image_paths[idx])
                 print("Saved cropped feature successfully to : ",processed_img_path + mask_image_paths[idx])
+                
+                # Save the final bounding boxes and stuff to image data
             else:
                 print("Trait not found in this mask.")
         
@@ -248,55 +274,56 @@ print(f"Processing {len(image_paths)} crops on CPU...")
 
 with torch.no_grad():
     for tr in range(1,10):
-        image_paths = list((crops_path / segmentation_traits[tr]).iterdir())
-        for img_path in image_paths:
-            try:
-                # Load image
-                # print(img_path.name)
-                cmp_str = img_path.name[:-4] + ".jpg"
-                print(cmp_str)
-                species = segmentation_df.loc[segmentation_df['filename'] == cmp_str]['standardized_species'].iloc[0]
-                if(img_path.exists()):
-                    image = Image.open(img_path).convert("RGB")
-                else:
-                    height, width = 480, 640
-                    # black image
-                    image = Image.new('RGB', (width, height), color=(0,0,0))
+        if (crops_path/segmentation_traits[tr]).exists():
+            image_paths = list((crops_path / segmentation_traits[tr]).iterdir())
+            for img_path in image_paths:
+                try:
+                    # Load image
+                    # print(img_path.name)
+                    cmp_str = img_path.name[:-4] + ".jpg"
+                    print(cmp_str)
+                    species = segmentation_df.loc[segmentation_df['filename'] == cmp_str]['standardized_species'].iloc[0]
+                    if(img_path.exists()):
+                        image = Image.open(img_path).convert("RGB")
+                    else:
+                        height, width = 480, 640
+                        # black image
+                        image = Image.new('RGB', (width, height), color=(0,0,0))
+                        
+                    # The processor automatically resizes to 224x224 efficiently
+                    image_inputs = processor(images=image, return_tensors="pt")
+                    image_features_i = model.get_image_features(**image_inputs)
+                    image_features = image_features_i.pooler_output / image_features_i.pooler_output.norm(p=2, dim=-1, keepdim=True)
                     
-                # The processor automatically resizes to 224x224 efficiently
-                image_inputs = processor(images=image, return_tensors="pt")
-                image_features_i = model.get_image_features(**image_inputs)
-                image_features = image_features_i.pooler_output / image_features_i.pooler_output.norm(p=2, dim=-1, keepdim=True)
-                
-                # Calculate Sigmoid probabilities
-                # Multiply image features by text features and apply SigLIP's temperature/bias
-                logits = (image_features @ text_features[tr].T) * model.logit_scale.exp() + model.logit_bias
-                probs = torch.sigmoid(logits).squeeze().tolist()
-                
-                # Find the highest scoring label
-                best_idx = probs.index(max(probs))
-                best_label = bioclip_trait_labels[tr][best_idx]
-                best_score = probs[best_idx]
-                # Record the data
-                metadata_records.append({
-                    "image_path": img_path,
-                    "predicted_trait": best_label,
-                    "confidence_score": round(best_score, 4),
-                    "is_valid": "unrecognizable" not in best_label # Flag non-targets instantly
-                })
-                
-                if species not in species_dict:
-                    species_dict[species] = {}
-                    species_dict[species][segmentation_traits[tr]] = [0] * len(bioclip_trait_labels[tr])
-                    species_dict[species][segmentation_traits[tr]][best_idx] += 1 
-                else:
-                    trait_name = segmentation_traits[tr]
-                    if trait_name not in species_dict[species]:
-                        species_dict[species][trait_name] = [0] * len(bioclip_trait_labels[tr])
-                    species_dict[species][segmentation_traits[tr]][best_idx] += 1
-                
-            except Exception as e:
-                print(f"Error processing {img_path}: {e}")
+                    # Calculate Sigmoid probabilities
+                    # Multiply image features by text features and apply SigLIP's temperature/bias
+                    logits = (image_features @ text_features[tr].T) * model.logit_scale.exp() + model.logit_bias
+                    probs = torch.sigmoid(logits).squeeze().tolist()
+                    
+                    # Find the highest scoring label
+                    best_idx = probs.index(max(probs))
+                    best_label = bioclip_trait_labels[tr][best_idx]
+                    best_score = probs[best_idx]
+                    # Record the data
+                    metadata_records.append({
+                        "image_path": img_path,
+                        "predicted_trait": best_label,
+                        "confidence_score": round(best_score, 4),
+                        "is_valid": "unrecognizable" not in best_label # Flag non-targets instantly
+                    })
+                    
+                    if species not in species_dict:
+                        species_dict[species] = {}
+                        species_dict[species][segmentation_traits[tr]] = [0] * len(bioclip_trait_labels[tr])
+                        species_dict[species][segmentation_traits[tr]][best_idx] += 1 
+                    else:
+                        trait_name = segmentation_traits[tr]
+                        if trait_name not in species_dict[species]:
+                            species_dict[species][trait_name] = [0] * len(bioclip_trait_labels[tr])
+                        species_dict[species][segmentation_traits[tr]][best_idx] += 1
+                    
+                except Exception as e:
+                    print(f"Error processing {img_path}: {e}")
 
 # 6. Save to CSV
 df = pd.DataFrame(metadata_records)
